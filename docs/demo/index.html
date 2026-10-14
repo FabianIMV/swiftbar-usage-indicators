@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SwiftBar Usage Indicators - demo</title>
+<!--
+  Static mock of the macOS menu bar used to generate the README images.
+  Pills reproduce what indicators/pill_render.swift draws: a full-radius pill,
+  a subtle vertical gradient, a 1px border 22% darker than the base color,
+  a 10% white top highlight and bold white text with a drop shadow.
+  Regenerate the images with: node scripts/screenshots.mjs
+-->
+<style>
+  :root {
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: var(--font); background: transparent; padding: 40px; }
+  .scene { position: relative; overflow: hidden; margin-bottom: 40px; border-radius: 14px; }
+
+  .wallpaper {
+    background:
+      radial-gradient(120% 140% at 15% 0%, #3d6fb6 0%, transparent 55%),
+      radial-gradient(120% 140% at 100% 100%, #7a4fa3 0%, transparent 55%),
+      linear-gradient(160deg, #2c5a9a 0%, #4a3f8c 100%);
+  }
+
+  .menubar {
+    height: 32px;
+    display: flex; align-items: center; justify-content: flex-end; gap: 18px;
+    padding: 0 18px;
+    background: rgba(40, 80, 140, 0.55);
+    backdrop-filter: blur(20px);
+    color: #fff; font-size: 13.5px; font-weight: 500;
+  }
+  .menubar .left { margin-right: auto; display: flex; gap: 20px; align-items: center; }
+  .menubar .left b { font-weight: 700; }
+  .icon { width: 17px; height: 17px; display: block; }
+  .clock { letter-spacing: 0.1px; }
+
+  /* Pill, matching pill_render.swift (17pt tall, 7pt horizontal padding). */
+  .pill {
+    --base: #D97757;
+    position: relative;
+    height: 17px; padding: 0 7px; border-radius: 8.5px;
+    display: inline-flex; align-items: center;
+    color: #fff; font-size: 12.5px; font-weight: 700; line-height: 1;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+    background: linear-gradient(to top, var(--base), color-mix(in srgb, var(--base), #fff 6%));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--base), #000 22%);
+    font-variant-numeric: tabular-nums;
+  }
+  .pill::after {
+    content: ""; position: absolute; left: 3px; right: 3px; top: 1.5px; height: 1px;
+    background: rgba(255, 255, 255, 0.10);
+  }
+  .pill.open { outline: 3px solid rgba(255, 255, 255, 0.22); outline-offset: 2px; }
+
+  /* macOS-style menu */
+  .menu {
+    position: absolute; top: 37px;
+    min-width: 236px; padding: 5px;
+    border-radius: 10px;
+    background: rgba(246, 246, 248, 0.86);
+    backdrop-filter: blur(30px) saturate(1.6);
+    box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.25), 0 12px 32px rgba(0, 0, 0, 0.32);
+    color: #1d1d1f; font-size: 13.5px;
+  }
+  .menu .item { padding: 3px 9px; border-radius: 5px; white-space: nowrap; line-height: 18px; }
+  .menu .item.hover { background: #2f6fe0; color: #fff; }
+  .menu .sep { height: 1px; margin: 5px 9px; background: rgba(0, 0, 0, 0.12); }
+  .menu .bar { letter-spacing: 0.5px; font-size: 14px; }
+  .menu .muted { color: rgba(0, 0, 0, 0.45); }
+
+  /* Ramps scene */
+  .ramps { background: #f5f5f7; padding: 28px 32px; color: #1d1d1f; }
+  .ramps.dark { background: #1c1c1e; color: #f5f5f7; }
+  .ramps h3 { font-size: 13px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; opacity: 0.55; margin: 0 0 12px; }
+  .ramps .row { display: flex; gap: 22px; align-items: flex-start; margin-bottom: 22px; }
+  .ramps .row:last-child { margin-bottom: 0; }
+  .ramps .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 64px; }
+  .ramps .cell span { font-size: 11.5px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<!-- Menu bar icons (generic, monochrome) -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="wifi" viewBox="0 0 24 24"><path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" d="M2.5 9a14 14 0 0 1 19 0M5.8 12.6a9.2 9.2 0 0 1 12.4 0M9.1 16.1a4.5 4.5 0 0 1 5.8 0"/><circle cx="12" cy="19.4" r="1.6" fill="#fff"/></symbol>
+    <symbol id="battery" viewBox="0 0 30 16"><rect x="1" y="2" width="24" height="12" rx="3.5" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.4"/><rect x="3" y="4" width="20" height="8" rx="2" fill="#fff"/><path d="M27 6.2v3.6a2 2 0 0 0 0-3.6z" fill="rgba(255,255,255,.55)"/></symbol>
+    <symbol id="search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M15.5 15.5 21 21" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="control" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="3.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="16.5" cy="7.5" r="2" fill="#fff"/><rect x="3" y="13" width="18" height="7" rx="3.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="7.5" cy="16.5" r="2" fill="#fff"/></symbol>
+  </defs>
+</svg>
+
+<!-- Scene: menu bar (hero) -->
+<section class="scene wallpaper" id="menubar" style="width: 820px; height: 32px;">
+  <div class="menubar">
+    <div class="pill" style="--base:#D97757">78%</div>
+    <div class="pill" style="--base:#2E7D4F">46%</div>
+    <svg class="icon" style="width:22px"><use href="#battery"/></svg>
+    <svg class="icon"><use href="#wifi"/></svg>
+    <svg class="icon"><use href="#search"/></svg>
+    <svg class="icon"><use href="#control"/></svg>
+    <span class="clock">Wed 14 Oct&nbsp;&nbsp;6:13 PM</span>
+  </div>
+</section>
+
+<!-- Scene: both dropdowns -->
+<section class="scene wallpaper" id="dropdown-claude" style="width: 820px; height: 232px;">
+  <div class="menubar">
+    <div class="pill open" style="--base:#D97757" id="pill-claude">78%</div>
+    <div class="pill" style="--base:#2E7D4F" id="pill-copilot">46%</div>
+    <svg class="icon" style="width:22px"><use href="#battery"/></svg>
+    <svg class="icon"><use href="#wifi"/></svg>
+    <svg class="icon"><use href="#search"/></svg>
+    <svg class="icon"><use href="#control"/></svg>
+    <span class="clock">Wed 14 Oct&nbsp;&nbsp;6:13 PM</span>
+  </div>
+  <div class="menu" style="left: 252px;">
+    <div class="item bar" style="color:#D97757">▓▓▓▓▓▓▓▓░░</div>
+    <div class="item">Spend: $156.0 / $200.0</div>
+    <div class="item hover">Remaining: 44.0</div>
+    <div class="item">Reset: -</div>
+    <div class="item">Updated: 2026-10-14T21:12:58+00:00</div>
+  </div>
+</section>
+
+<section class="scene wallpaper" id="dropdown-copilot" style="width: 820px; height: 232px;">
+  <div class="menubar">
+    <div class="pill" style="--base:#D97757">78%</div>
+    <div class="pill open" style="--base:#2E7D4F">46%</div>
+    <svg class="icon" style="width:22px"><use href="#battery"/></svg>
+    <svg class="icon"><use href="#wifi"/></svg>
+    <svg class="icon"><use href="#search"/></svg>
+    <svg class="icon"><use href="#control"/></svg>
+    <span class="clock">Wed 14 Oct&nbsp;&nbsp;6:13 PM</span>
+  </div>
+  <div class="menu" style="left: 306px;">
+    <div class="item bar" style="color:#2ecc71">▓▓▓▓▓░░░░░</div>
+    <div class="item">Used: 138 / 300</div>
+    <div class="item hover">Remaining: 162</div>
+    <div class="item">Reset: 2026-11-01</div>
+    <div class="item">Updated: 2026-10-14T21:13:05+00:00</div>
+  </div>
+</section>
+
+<!-- Scene: color ramps -->
+<section class="scene ramps" id="ramps" style="width: 640px;">
+  <h3>Claude Code</h3>
+  <div class="row">
+    <div class="cell"><div class="pill" style="--base:#D97757">42%</div><span>&lt; 80%</span></div>
+    <div class="cell"><div class="pill" style="--base:#E06A45">84%</div><span>80–89%</span></div>
+    <div class="cell"><div class="pill" style="--base:#E5484D">96%</div><span>≥ 90%</span></div>
+    <div class="cell"><div class="pill" style="--base:#D97757">31% !</div><span>stale</span></div>
+  </div>
+  <h3>GitHub Copilot</h3>
+  <div class="row">
+    <div class="cell"><div class="pill" style="--base:#2E7D4F">18%</div><span>&lt; 50%</span></div>
+    <div class="cell"><div class="pill" style="--base:#6B8E3D">61%</div><span>50–69%</span></div>
+    <div class="cell"><div class="pill" style="--base:#C77B3F">77%</div><span>70–84%</span></div>
+    <div class="cell"><div class="pill" style="--base:#E5484D">92%</div><span>≥ 85%</span></div>
+    <div class="cell"><div class="pill" style="--base:#2E7D4F">46% !</div><span>stale</span></div>
+  </div>
+</section>
+
+</body>
+</html>

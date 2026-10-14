@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""SwiftBar plugin: indicador de uso de Claude Code.
+"""SwiftBar plugin: Claude Code usage indicator.
 
-Llama fetcher.get_usage() directamente: el fetcher ya tiene throttle interno
-(MIN_INTERVAL ~120s + backoff 429) y nunca expone tokens. Fallback a cache
-~/.cache/claude-usage.json con stale=true si el fetch falla. Linea 1 como
-pildora redondeada (pill_render via image= base64); fallback a fondo ANSI
-256 colores si el renderer falla. Siempre sale 0.
+Calls fetcher.get_usage() directly; the fetcher already throttles itself
+(MIN_INTERVAL ~120s plus 429 backoff) and never exposes tokens. Falls back to
+~/.cache/claude-usage.json marked stale if the fetch fails. Line 1 is a
+rounded pill (pill_render, embedded as base64 via image=), with an ANSI
+256-color fallback if the renderer fails. Always exits 0.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ PILL_HEIGHT = "17"
 
 
 def read_cache() -> dict | None:
-    """Lee el cache si es dict valido; si no, None."""
+    """Return the cache if it is a valid dict, otherwise None."""
     try:
         with open(CACHE_PATH, "r", encoding="utf-8") as fh:
             cached = json.load(fh)
@@ -35,7 +35,7 @@ def read_cache() -> dict | None:
 
 
 def parse_iso(value: object) -> datetime | None:
-    """Parsea ISO 8601 tolerando Z y naive (asume UTC)."""
+    """Parse ISO 8601, accepting a trailing Z and naive values (assumed UTC)."""
     if not value or not isinstance(value, str):
         return None
     try:
@@ -48,10 +48,10 @@ def parse_iso(value: object) -> datetime | None:
 
 
 def color_for(percent: float) -> int:
-    """Naranja de Claude con degradado a rojo cerca del limite (256 colores).
+    """Claude orange shading to red near the limit (256-color palette).
 
-    <80 naranja Claude 173, 80-89 rojo-naranja 208, >=90 rojo puro 196.
-    Devuelve el codigo 256 de fondo. Solo se usa como fallback ANSI.
+    <80 Claude orange 173, 80-89 red-orange 208, >=90 red 196.
+    Returns the 256-color background code. Only used by the ANSI fallback.
     """
     if percent < 80:
         return 173
@@ -61,8 +61,8 @@ def color_for(percent: float) -> int:
 
 
 def hex_for(percent: float) -> str:
-    """Hex de fondo de la pildora por tramo (<80 naranja, 80-89
-    rojo-naranja, >=90 rojo)."""
+    """Pill background hex per band (<80 orange, 80-89 red-orange,
+    >=90 red)."""
     if percent < 80:
         return "#D97757"
     if percent < 90:
@@ -71,7 +71,7 @@ def hex_for(percent: float) -> str:
 
 
 def pill_image_b64(text: str, base_hex: str) -> str | None:
-    """Renderiza la pildora con pill_render; None si falla."""
+    """Render the pill with pill_render; None on failure."""
     try:
         proc = subprocess.run(
             [PILL_RENDER, text, base_hex, "", PILL_HEIGHT],
@@ -88,7 +88,7 @@ def pill_image_b64(text: str, base_hex: str) -> str | None:
 
 
 def emit_title(text: str, base_hex: str, ansi_bg: int) -> None:
-    """Linea 1: pildora con imagen; fallback ANSI si el renderer falla."""
+    """Line 1: image pill, or ANSI text if the renderer fails."""
     b64 = pill_image_b64(text, base_hex)
     if b64 is not None:
         print("  | image=%s height=%s" % (b64, PILL_HEIGHT))
@@ -97,7 +97,7 @@ def emit_title(text: str, base_hex: str, ansi_bg: int) -> None:
 
 
 def fmt_percent(value: object) -> str:
-    """Formatea a 1 decimal max, sin .0 si es entero."""
+    """Format with at most one decimal, dropping a trailing .0."""
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -108,19 +108,19 @@ def fmt_percent(value: object) -> str:
 
 
 def bar_for(percent: float) -> str:
-    """Barra unicode de 10 bloques. Llenos usan ▓, vacios ░."""
+    """10-block unicode bar: ▓ for filled, ░ for empty."""
     filled = int(round(percent / 10))
     filled = max(0, min(10, filled))
     return "▓" * filled + "░" * (10 - filled)
 
 
 def emit_error(message: str) -> None:
-    """Linea 1 de error y sale 0 (SwiftBar oculta el plugin si falla)."""
+    """Error line 1 (the caller still exits 0 so SwiftBar keeps the plugin)."""
     print(message + " | color=red")
 
 
 def main() -> int:
-    # El fetcher hace su propio throttle; lo llamamos directo.
+    # The fetcher throttles itself, so call it on every run.
     try:
         data = fetcher.get_usage()
     except Exception as exc:
@@ -129,12 +129,12 @@ def main() -> int:
             cached["stale"] = True
             data = cached
         else:
-            emit_error("Claude: sin datos")
-            sys.stderr.write("claude plugin: fetch fallo: %s\n" % exc)
+            emit_error("Claude: no data")
+            sys.stderr.write("claude plugin: fetch failed: %s\n" % exc)
             return 0
 
     if not isinstance(data, dict):
-        emit_error("Claude: sin datos")
+        emit_error("Claude: no data")
         return 0
 
     stale = bool(data.get("stale"))
@@ -147,19 +147,19 @@ def main() -> int:
     bg = color_for(percent)
     suffix = " !" if stale else ""
 
-    # Linea 1: pildora compacta con solo el porcentaje (el detalle vive
-    # en el dropdown); el fallback ANSI conserva el formato anterior.
+    # Line 1: compact pill with just the percentage; details live in the
+    # dropdown.
     text = "%s%%%s" % (fmt_percent(percent), suffix)
     emit_title(text, hex_for(percent), bg)
     print("---")
-    # Barra unicode pintada con el naranja de Claude (#D97757) para combinar.
+    # Progress bar tinted with Claude orange (#D97757) to match the pill.
     print(bar_for(percent) + " | color=#D97757")
-    print("Gasto: $%s / $%s" % (used, entitlement))
-    print("Restante: %s" % remaining)
+    print("Spend: $%s / $%s" % (used, entitlement))
+    print("Remaining: %s" % remaining)
     print("Reset: %s" % reset)
-    print("Actualizado: %s" % updated_at)
+    print("Updated: %s" % updated_at)
     if stale:
-        print("Stale: si | color=#e74c3c")
+        print("Stale: yes | color=#e74c3c")
     return 0
 
 
@@ -169,7 +169,7 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as exc:
-        # Nunca fallar: SwiftBar oculta el plugin si el exit code no es 0.
-        emit_error("Claude: sin datos")
-        sys.stderr.write("claude plugin: error inesperado: %s\n" % exc)
+        # Never fail: SwiftBar hides the plugin on a non-zero exit code.
+        emit_error("Claude: no data")
+        sys.stderr.write("claude plugin: unexpected error: %s\n" % exc)
         sys.exit(0)

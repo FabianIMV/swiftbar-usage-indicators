@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build pill_render
+        run: swiftc -O indicators/pill_render.swift -o indicators/pill_render
+
+      - name: Render a sample pill
+        run: ./indicators/pill_render "78%" "#D97757" "" 17 | base64 --decode > pill.png && file pill.png
+
+      - name: Compile Python
+        run: python3 -m py_compile plugins/*.py indicators/*/fetcher.py

@@ -1,27 +1,29 @@
-"""Claude Code usage fetcher. Solo stdlib.
+"""Claude Code usage fetcher. Standard library only.
 
-Escribe ~/.cache/claude-usage.json con el MISMO contrato que el fetcher de
-Copilot: percent_used, used, entitlement, remaining, reset, updated_at, stale.
+Writes ~/.cache/claude-usage.json using the SAME contract as the Copilot
+fetcher: percent_used, used, entitlement, remaining, reset, updated_at, stale.
 
-Fuente primaria: GET https://api.anthropic.com/api/oauth/usage (endpoint
-indocumentado que alimenta el /usage de Claude Code).
+Primary source: GET https://api.anthropic.com/api/oauth/usage (the
+undocumented endpoint behind Claude Code's /usage command).
   Headers: Authorization: Bearer <token>, anthropic-beta: oauth-2025-04-20,
            Accept: application/json, User-Agent: claude-code/<version>
-  (el User-Agent es obligatorio: sin el, el endpoint responde 429.)
+  (The User-Agent is required: without it the endpoint answers 429.)
 
-Tokens, en orden, todos locales y solo en memoria (nunca se imprimen ni se
-escriben a disco):
-  1. ~/.claude/.credentials.json -> claudeAiOauth.accessToken, solo si no
-     esta vencido (expiresAt).
-  2. CLAUDE_CODE_OAUTH_TOKEN del entorno de los procesos claude vivos
-     (Claude Desktop refresca ese token y lo inyecta al CLI).
+Token sources, in order. All are local and kept in memory only (never printed
+or written to disk):
+  1. ~/.claude/.credentials.json -> claudeAiOauth.accessToken, only if it has
+     not expired (expiresAt).
+  2. The macOS Keychain item "Claude Code-credentials", refreshed through
+     OAuth when the access token has expired.
+  3. CLAUDE_CODE_OAUTH_TOKEN from the environment of running claude
+     processes.
 
-Fallback: estimacion rolling de 5h desde ~/.claude/projects/**/*.jsonl
-(tokens de las ultimas 5h / CLAUDE_USAGE_5H_BUDGET_TOKENS), siempre stale.
+Fallback: a rolling 5h estimate from ~/.claude/projects/**/*.jsonl
+(tokens in the last 5h / CLAUDE_USAGE_5H_BUDGET_TOKENS), always stale.
 
-Rate limit: el endpoint limita por access token, asi que solo se consulta la
-red si el cache tiene mas de CLAUDE_USAGE_MIN_INTERVAL segundos (120 por
-defecto) o esta stale; un 429 activa backoff en ~/.cache/claude-usage.next.
+Rate limiting: the endpoint limits per access token, so the network is only
+used when the cache is older than CLAUDE_USAGE_MIN_INTERVAL seconds (120 by
+default) or stale; a 429 sets a backoff in ~/.cache/claude-usage.next.
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ API_URL = "https://api.anthropic.com/api/oauth/usage"
 BETA_HEADER = "oauth-2025-04-20"
 FALLBACK_USER_AGENT = "claude-code/2.1.281"
 
-# Refresh OAuth del token de Claude Code (datos verificados).
+# OAuth refresh for the Claude Code token.
 OAUTH_TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
 OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
@@ -63,7 +65,7 @@ WINDOW_HOURS = 5
 
 
 def _log(msg: str) -> None:
-    """Motivos en stderr. Nunca recibe tokens."""
+    """Log a reason to stderr. Never receives tokens."""
     sys.stderr.write("claude-usage fetcher: " + msg + "\n")
 
 
@@ -89,7 +91,7 @@ def _parse_iso(value: str) -> datetime | None:
 
 # ---------------------------------------------------------------- user agent
 def _detect_user_agent() -> str:
-    """Version real de Claude Code si se puede detectar barato (solo dirs)."""
+    """Installed Claude Code version, if cheaply detectable (directory names only)."""
     candidates: list[Path] = []
     for base in (CLAUDE_BIN, CLAUDE_DESKTOP_BIN):
         try:
@@ -108,61 +110,60 @@ def _detect_user_agent() -> str:
 
 # ------------------------------------------------------------------- tokens
 def _parse_oauth_json(data: object) -> tuple[str | None, str | None]:
-    """Extrae accessToken del JSON OAuth y valida expiresAt.
+    """Extract accessToken from the OAuth JSON and check expiresAt.
 
-    Mismo criterio de vencimiento que el archivo de credenciales: expiresAt en
-    milisegundos; se considera vencido si vence en menos de 60s. Devuelve
-    (token, None) si es util, o (None, razon) si no.
+    expiresAt is in milliseconds; a token expiring within 60s counts as
+    expired. Returns (token, None) when usable, otherwise (None, reason).
     """
     if not isinstance(data, dict):
-        return None, "JSON OAuth no es un objeto"
+        return None, "OAuth JSON is not an object"
     oauth = data.get("claudeAiOauth") or {}
     if not isinstance(oauth, dict):
-        return None, "JSON OAuth sin claudeAiOauth"
+        return None, "OAuth JSON has no claudeAiOauth"
     token = oauth.get("accessToken")
     if not isinstance(token, str) or not token:
-        return None, "OAuth sin claudeAiOauth.accessToken"
+        return None, "OAuth JSON has no claudeAiOauth.accessToken"
     expires_at = oauth.get("expiresAt")
     if isinstance(expires_at, (int, float)) and expires_at / 1000 < time.time() + 60:
-        return None, "accessToken vencido (expiresAt)"
+        return None, "accessToken expired (expiresAt)"
     return token, None
 
 
 def _read_keychain_secret() -> tuple[str | None, str | None]:
-    """Lee el secreto desde el Keychain de macOS via `security`.
+    """Read the secret from the macOS Keychain via `security`.
 
-    Primero sin -a (aplica al usuario actual); si falla, reintenta con
-    -a <usuario actual>. Timeout corto. Devuelve (secreto, None) o (None, razon).
+    First without -a (current user); on failure, retry with
+    -a <current user>. Short timeout. Returns (secret, None) or (None, reason).
     """
     commands = [
-        ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-        ["security", "find-generic-password", "-s", "Claude Code-credentials", "-a", KEYCHAIN_ACCOUNT, "-w"],
+        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"],
     ]
-    last_reason = "sin intentos de Keychain"
+    last_reason = "no Keychain attempts"
     for cmd in commands:
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8, check=False)
         except FileNotFoundError:
-            return None, "comando security no disponible"
+            return None, "security command not available"
         except subprocess.TimeoutExpired:
-            last_reason = "timeout leyendo Keychain"
+            last_reason = "timed out reading the Keychain"
             continue
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "").strip()
-            last_reason = "Keychain fallo (exit %d): %s" % (proc.returncode, err or "sin detalle")
+            last_reason = "Keychain read failed (exit %d): %s" % (proc.returncode, err or "no details")
             continue
         secret = (proc.stdout or "").strip()
         if secret:
             return secret, None
-        last_reason = "Keychain devolvio secreto vacio"
+        last_reason = "Keychain returned an empty secret"
     return None, last_reason
 
 
 def _write_keychain_secret(data: dict) -> bool:
-    """Persiste el JSON de credenciales en el Keychain (best effort).
+    """Persist the credentials JSON to the Keychain (best effort).
 
-    Reemplaza el item existente (-U). Si el write falla, solo loguea y sigue:
-    el token nuevo en memoria sigue siendo util para este ciclo.
+    Replaces the existing item (-U). If the write fails, it only logs: the new
+    in-memory token is still usable for this run.
     """
     blob = json.dumps(data)
     cmd = [
@@ -172,22 +173,22 @@ def _write_keychain_secret(data: dict) -> bool:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8, check=False)
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        _log("no se pudo escribir el Keychain: " + type(exc).__name__)
+        _log("could not write the Keychain: " + type(exc).__name__)
         return False
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()
-        _log("write Keychain fallo (exit %d): %s" % (proc.returncode, err or "sin detalle"))
+        _log("Keychain write failed (exit %d): %s" % (proc.returncode, err or "no details"))
         return False
     return True
 
 
 def _oauth_refresh(refresh_token: str, base_data: dict) -> tuple[str | None, str | None]:
-    """Refresca el accessToken via OAuth usando el refreshToken.
+    """Refresh the accessToken through OAuth using the refreshToken.
 
-    POST a OAUTH_TOKEN_URL. Con 200 devuelve el nuevo access_token y persiste
-    el JSON actualizado en el Keychain (conserva scopes, reemplaza tokens y
-    expiresAt). Con cualquier fallo loguea la razon y devuelve (None, razon)
-    sin crashear, para seguir el flujo de fallback actual.
+    POSTs to OAUTH_TOKEN_URL. On 200, returns the new access_token and
+    persists the updated JSON to the Keychain (keeping scopes, replacing the
+    tokens and expiresAt). On any failure, returns (None, reason) without
+    raising so the regular fallback chain continues.
     """
     payload = json.dumps({
         "grant_type": "refresh_token",
@@ -210,28 +211,28 @@ def _oauth_refresh(refresh_token: str, base_data: dict) -> tuple[str | None, str
             detail = exc.read().decode("utf-8", "ignore")[:200]
         except OSError:
             pass
-        return None, "refresh HTTP %d: %s" % (exc.code, detail or "sin detalle")
-    except Exception as exc:  # red, DNS, timeout
-        return None, "refresh fallo red: " + type(exc).__name__
+        return None, "refresh HTTP %d: %s" % (exc.code, detail or "no details")
+    except Exception as exc:  # network, DNS, timeout
+        return None, "refresh network error: " + type(exc).__name__
 
     if status != 200:
-        return None, "refresh HTTP %d (no 200)" % status
+        return None, "refresh HTTP %d (not 200)" % status
     try:
         token_data = json.loads(body)
     except json.JSONDecodeError:
-        return None, "refresh respuesta no-JSON"
+        return None, "refresh response is not JSON"
     if not isinstance(token_data, dict):
-        return None, "refresh respuesta no es objeto"
+        return None, "refresh response is not an object"
     new_access = token_data.get("access_token")
     new_refresh = token_data.get("refresh_token")
     expires_in = token_data.get("expires_in")
     if not isinstance(new_access, str) or not new_access:
-        return None, "refresh sin access_token"
+        return None, "refresh response has no access_token"
     if not isinstance(expires_in, (int, float)):
         expires_in = 28800
     new_expires_at = int(time.time() * 1000) + int(expires_in) * 1000
 
-    # Persistir en Keychain: conserva scopes y demas, reemplaza tokens/expiresAt.
+    # Persist to the Keychain: keep scopes and other fields, replace tokens/expiresAt.
     updated = dict(base_data) if isinstance(base_data, dict) else {}
     oauth = dict(updated.get("claudeAiOauth") or {})
     oauth["accessToken"] = new_access
@@ -239,16 +240,16 @@ def _oauth_refresh(refresh_token: str, base_data: dict) -> tuple[str | None, str
         oauth["refreshToken"] = new_refresh
     oauth["expiresAt"] = new_expires_at
     updated["claudeAiOauth"] = oauth
-    _write_keychain_secret(updated)  # best effort; ya loguea si falla
+    _write_keychain_secret(updated)  # best effort; logs on failure
     return new_access, None
 
 
 def _keychain_token() -> tuple[str | None, str | None]:
-    """Token desde el Keychain de macOS (2a fuente tras el archivo).
+    """Token from the macOS Keychain (second source after the file).
 
-    Si el accessToken esta vencido o a punto de vencer, intenta el refresh
-    OAuth con el refreshToken antes de rechazarlo. Si el refresh falla,
-    loguea la razon y devuelve (None, razon) para seguir el fallback actual.
+    If the accessToken has expired or is about to, try an OAuth refresh with
+    the refreshToken before giving up. If the refresh fails, return
+    (None, reason) so the fallback chain continues.
     """
     secret, reason = _read_keychain_secret()
     if secret is None:
@@ -256,55 +257,56 @@ def _keychain_token() -> tuple[str | None, str | None]:
     try:
         data = json.loads(secret)
     except json.JSONDecodeError:
-        return None, "JSON invalido en Keychain"
+        return None, "invalid JSON in the Keychain"
     token, err = _parse_oauth_json(data)
     if token is not None:
         return token, None
 
-    # Token vencido (o a punto de vencer): intentar refresh OAuth.
+    # Expired (or about to expire): try an OAuth refresh.
     oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
     refresh_token = oauth.get("refreshToken") if isinstance(oauth, dict) else None
     if not isinstance(refresh_token, str) or not refresh_token:
-        return None, (err or "sin token") + " y sin refreshToken en Keychain"
-    _log("accessToken del Keychain vencido; intentando refresh OAuth")
+        return None, (err or "no token") + " and no refreshToken in the Keychain"
+    _log("Keychain accessToken expired; trying OAuth refresh")
     token, refresh_err = _oauth_refresh(refresh_token, data)
     if token is not None:
-        _log("refresh OAuth ok; accessToken nuevo persistido en Keychain")
+        _log("OAuth refresh ok; new accessToken saved to the Keychain")
         return token, None
-    return None, (refresh_err or "refresh fallo") + " (" + (err or "vencido") + ")"
+    return None, (refresh_err or "refresh failed") + " (" + (err or "expired") + ")"
 
 
 def _credentials_token() -> tuple[str | None, str | None]:
-    """Token OAuth util: 1) archivo de credenciales, 2) Keychain macOS.
+    """Usable OAuth token: 1) credentials file, 2) macOS Keychain.
 
-    Aplica la misma logica de vencimiento por expiresAt a ambas fuentes. Si
-    ninguna da token vivo, devuelve (None, razon) y el caller cae al fallback.
+    Both sources use the same expiresAt check. If neither yields a live token,
+    returns (None, reason) and the caller falls back.
     """
-    # 1) Archivo ~/.claude/.credentials.json
-    file_reason = "sin credentials"
+    # 1) ~/.claude/.credentials.json
+    file_reason = "no credentials"
     try:
         data = json.loads(CRED_PATH.read_text(encoding="utf-8"))
         token, err = _parse_oauth_json(data)
         if token is not None:
             return token, None
-        file_reason = err or "credentials sin token util"
+        file_reason = err or "credentials file has no usable token"
     except FileNotFoundError:
-        file_reason = "no existe " + str(CRED_PATH)
+        file_reason = "missing " + str(CRED_PATH)
     except (OSError, json.JSONDecodeError) as exc:
-        file_reason = "no se pudo leer credentials: " + type(exc).__name__
+        file_reason = "could not read credentials: " + type(exc).__name__
 
-    # 2) Keychain de macOS (si el archivo no dio token vivo)
-    _log("credentials archivo sin token (" + file_reason + "); probando Keychain")
+    # 2) macOS Keychain (if the file had no live token)
+    _log("no token in credentials file (" + file_reason + "); trying Keychain")
     token, key_reason = _keychain_token()
     if token is not None:
         return token, None
-    return None, (key_reason or "sin token") + " (archivo: " + file_reason + ")"
+    return None, (key_reason or "no token") + " (file: " + file_reason + ")"
 
 
 def _live_tokens() -> list[str]:
-    """CLAUDE_CODE_OAUTH_TOKEN de los procesos claude vivos de este usuario.
+    """CLAUDE_CODE_OAUTH_TOKEN from this user's running claude processes.
 
-    Solo lectura de /proc propio; el token nunca sale de memoria.
+    Reads /proc only (a no-op where /proc is unavailable, such as macOS);
+    tokens never leave memory.
     """
     found: list[str] = []
     own = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
@@ -357,7 +359,7 @@ def _get_usage(token: str) -> tuple[int, str | None]:
         except OSError:
             pass
         return exc.code, body
-    except Exception as exc:  # red, DNS, timeout
+    except Exception as exc:  # network, DNS, timeout
         return 0, str(type(exc).__name__)
 
 
@@ -375,10 +377,10 @@ def _api_message(body: str | None) -> str:
 
 
 def parse_usage(data: dict) -> dict | None:
-    """Del JSON del endpoint arma el contrato de cache. None si no hay datos."""
+    """Build the cache contract from the endpoint JSON. None if there is no usage data."""
     now = _now()
 
-    # 1) Ventana 5h (cuentas con rate limit por ventana): utilization + reset.
+    # 1) 5h window (accounts with windowed rate limits): utilization + reset.
     five_hour = data.get("five_hour")
     if isinstance(five_hour, dict) and five_hour.get("utilization") is not None:
         percent = _clamp(float(five_hour.get("utilization") or 0))
@@ -392,7 +394,7 @@ def parse_usage(data: dict) -> dict | None:
             "stale": False,
         }
 
-    # 2) Gasto extra (cuentas enterprise/usage-based): spend mensual en USD.
+    # 2) Extra spend (enterprise/usage-based accounts): monthly spend in USD.
     spend = data.get("spend")
     if isinstance(spend, dict) and spend.get("enabled") and isinstance(spend.get("limit"), dict):
         used_minor = float((spend.get("used") or {}).get("amount_minor") or 0)
@@ -414,7 +416,7 @@ def parse_usage(data: dict) -> dict | None:
                 "stale": False,
             }
 
-    # 3) extra_usage como respaldo (mismo concepto, en creditos).
+    # 3) extra_usage as a backup (same idea, in credits).
     extra = data.get("extra_usage")
     if isinstance(extra, dict) and extra.get("monthly_limit"):
         limit = float(extra.get("monthly_limit") or 0)
@@ -447,7 +449,7 @@ def _clamp(value: float) -> float:
 
 # --------------------------------------------------------------- jsonl fallback
 def estimate_from_jsonl() -> dict | None:
-    """Estimacion rolling 5h desde los transcripts locales de Claude Code."""
+    """Rolling 5h estimate from local Claude Code transcripts."""
     if not PROJECTS_DIR.is_dir():
         return None
     now = _now()
@@ -551,11 +553,11 @@ def _write_backoff(until_ts: float) -> None:
 
 # --------------------------------------------------------------------- main
 def get_usage() -> dict:
-    """Obtiene uso de Claude y escribe el cache atomico. Nunca expone tokens."""
+    """Get Claude usage and write the cache atomically. Never exposes tokens."""
     now_ts = time.time()
     cached = _read_cache()
 
-    # Cache util y fresco: no toca la red (el endpoint limita por token).
+    # Fresh, usable cache: skip the network (the endpoint limits per token).
     if cached is not None and not cached.get("stale"):
         updated = _parse_iso(cached.get("updated_at") or "")
         if updated is not None and (now_ts - updated.timestamp()) < MIN_INTERVAL:
@@ -571,12 +573,12 @@ def get_usage() -> dict:
     if token:
         candidates.append(token)
     else:
-        _log(cred_reason or "sin token en credentials")
+        _log(cred_reason or "no token in credentials")
     candidates.extend(_live_tokens())
 
-    last_reason = cred_reason or "sin token disponible"
+    last_reason = cred_reason or "no token available"
     if not candidates:
-        _log("sin token utilizable; usando estimacion JSONL rolling %dh" % WINDOW_HOURS)
+        _log("no usable token; using rolling %dh JSONL estimate" % WINDOW_HOURS)
     for candidate in candidates:
         status, body = _get_usage(candidate)
         if status == 200:
@@ -584,18 +586,18 @@ def get_usage() -> dict:
                 payload = parse_usage(json.loads(body or "{}"))
             except json.JSONDecodeError:
                 payload = None
-                last_reason = "respuesta no-JSON del endpoint"
+                last_reason = "non-JSON response from the endpoint"
             if payload is not None:
                 _write_cache_atomic(payload)
                 _write_backoff(0.0)
                 return payload
-            last_reason = "endpoint sin datos de uso utilizables"
+            last_reason = "endpoint returned no usable usage data"
             break
         if status == 401 or status == 403:
-            last_reason = "token rechazado (%d) %s" % (status, _api_message(body))
+            last_reason = "token rejected (%d) %s" % (status, _api_message(body))
             continue
         if status == 429:
-            last_reason = "rate limit 429 del endpoint"
+            last_reason = "rate limited (429) by the endpoint"
             _write_backoff(now_ts + BACKOFF_INTERVAL)
             break
         last_reason = "HTTP %d %s" % (status, _api_message(body))
@@ -608,7 +610,7 @@ def get_usage() -> dict:
     estimate = estimate_from_jsonl()
     if estimate is not None:
         _log(
-            "auth no disponible; cache stale con estimacion JSONL rolling %dh"
+            "auth unavailable; stale cache from rolling %dh JSONL estimate"
             % WINDOW_HOURS
         )
         _write_cache_atomic(estimate)
@@ -617,7 +619,7 @@ def get_usage() -> dict:
     if cached is not None:
         cached["stale"] = True
         _write_cache_atomic(cached)
-        _log("auth no disponible y sin transcripts; cache previo marcado stale")
+        _log("auth unavailable and no transcripts; previous cache marked stale")
         return cached
 
     payload = {
@@ -630,7 +632,7 @@ def get_usage() -> dict:
         "stale": True,
     }
     _write_cache_atomic(payload)
-    _log("auth no disponible y sin cache previo; cache en ceros stale")
+    _log("auth unavailable and no previous cache; wrote zeroed stale cache")
     return payload
 
 
