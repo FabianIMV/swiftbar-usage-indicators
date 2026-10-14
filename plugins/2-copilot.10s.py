@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""SwiftBar plugin: indicador de uso de Copilot premium interactions.
+"""SwiftBar plugin: GitHub Copilot premium interactions usage indicator.
 
-Lee el cache ~/.cache/copilot-usage.json. Solo consulta la red si la cache
-tiene mas de 30s (usa la key updated_at, formato ISO). Linea 1 como pildora
-redondeada (pill_render via image= base64) en verde suave y oscuro con
-tramos a oliva/naranja/rojo; fallback a fondo ANSI 256 colores si el
-renderer falla. Siempre sale con codigo 0.
+Reads ~/.cache/copilot-usage.json and only hits the network when the cache is
+older than 30s (based on its ISO updated_at key). Line 1 is a rounded pill
+(pill_render, embedded as base64 via image=) in a muted dark green that steps
+through olive, orange and red, with an ANSI 256-color fallback if the
+renderer fails. Always exits 0.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ PILL_HEIGHT = "17"
 
 
 def read_cache() -> dict | None:
-    """Lee el cache si es dict valido; si no, None."""
+    """Return the cache if it is a valid dict, otherwise None."""
     try:
         with open(CACHE_PATH, "r", encoding="utf-8") as fh:
             cached = json.load(fh)
@@ -36,7 +36,7 @@ def read_cache() -> dict | None:
 
 
 def parse_iso(value: object) -> datetime | None:
-    """Parsea ISO 8601 tolerando Z y naive (asume UTC)."""
+    """Parse ISO 8601, accepting a trailing Z and naive values (assumed UTC)."""
     if not value or not isinstance(value, str):
         return None
     try:
@@ -49,7 +49,7 @@ def parse_iso(value: object) -> datetime | None:
 
 
 def cache_age_seconds(cached: dict) -> float | None:
-    """Edad del cache en segundos, None si updated_at no es parseable."""
+    """Cache age in seconds, or None if updated_at cannot be parsed."""
     updated = parse_iso(cached.get("updated_at"))
     if updated is None:
         return None
@@ -57,11 +57,11 @@ def cache_age_seconds(cached: dict) -> float | None:
 
 
 def color_for(percent: float) -> int:
-    """Gradiente verde→rojo en 256 colores sobre tramos fijos de percent_used.
+    """Green-to-red ramp in the 256-color palette over fixed percent_used bands.
 
-    0-49 verde 46, 50-59 verde-amarillo 148, 60-69 amarillo 226,
-    70-84 naranja 208, 85-100 rojo 196. Devuelve el codigo 256 de fondo.
-    Solo se usa como fallback ANSI.
+    0-49 green 46, 50-59 yellow-green 148, 60-69 yellow 226,
+    70-84 orange 208, 85-100 red 196. Returns the 256-color background code.
+    Only used by the ANSI fallback.
     """
     if percent < 50:
         return 46
@@ -75,8 +75,8 @@ def color_for(percent: float) -> int:
 
 
 def hex_for(percent: float) -> str:
-    """Hex de fondo de la pildora por tramo: verde suave oscuro base,
-    oliva apagado, naranja apagado, rojo."""
+    """Pill background hex per band: muted dark green, muted olive,
+    muted orange, red."""
     if percent < 50:
         return "#2E7D4F"
     if percent < 70:
@@ -87,7 +87,7 @@ def hex_for(percent: float) -> str:
 
 
 def pill_image_b64(text: str, base_hex: str) -> str | None:
-    """Renderiza la pildora con pill_render; None si falla."""
+    """Render the pill with pill_render; None on failure."""
     try:
         proc = subprocess.run(
             [PILL_RENDER, text, base_hex, "", PILL_HEIGHT],
@@ -104,7 +104,7 @@ def pill_image_b64(text: str, base_hex: str) -> str | None:
 
 
 def emit_title(text: str, base_hex: str, ansi_bg: int) -> None:
-    """Linea 1: pildora con imagen; fallback ANSI si el renderer falla."""
+    """Line 1: image pill, or ANSI text if the renderer fails."""
     b64 = pill_image_b64(text, base_hex)
     if b64 is not None:
         print("  | image=%s height=%s" % (b64, PILL_HEIGHT))
@@ -113,7 +113,7 @@ def emit_title(text: str, base_hex: str, ansi_bg: int) -> None:
 
 
 def fmt_percent(value: object) -> str:
-    """Formatea a 1 decimal max, sin .0 si es entero."""
+    """Format with at most one decimal, dropping a trailing .0."""
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -124,14 +124,14 @@ def fmt_percent(value: object) -> str:
 
 
 def bar_for(percent: float) -> str:
-    """Barra unicode de 10 bloques. Llenos usan ▓, vacios ░."""
+    """10-block unicode bar: ▓ for filled, ░ for empty."""
     filled = int(round(percent / 10))
     filled = max(0, min(10, filled))
     return "▓" * filled + "░" * (10 - filled)
 
 
 def emit_error(message: str) -> None:
-    """Linea 1 de error y sale 0 (SwiftBar oculta el plugin si falla)."""
+    """Error line 1 (the caller still exits 0 so SwiftBar keeps the plugin)."""
     print("Copilot: " + message + " | color=red")
 
 
@@ -140,7 +140,8 @@ def main() -> int:
     stale = False
     data: dict | None = None
 
-    # Fetch solo si no hay cache o tiene mas de 30s; si falla, cache previa.
+    # Fetch only when there is no cache or it is older than 30s; on failure,
+    # fall back to the previous cache.
     age = cache_age_seconds(cached) if cached else None
     needs_fetch = cached is None or age is None or age > MAX_AGE_SECONDS
     if needs_fetch:
@@ -152,14 +153,14 @@ def main() -> int:
                 data["stale"] = True
                 stale = True
             else:
-                emit_error("sin datos")
-                sys.stderr.write("copilot plugin: fetch fallo: %s\n" % exc)
+                emit_error("no data")
+                sys.stderr.write("copilot plugin: fetch failed: %s\n" % exc)
                 return 0
     else:
         data = dict(cached)
 
     if data is None:
-        emit_error("sin datos")
+        emit_error("no data")
         return 0
 
     if data.get("stale"):
@@ -174,19 +175,19 @@ def main() -> int:
     bg = color_for(percent)
     suffix = " !" if stale else ""
 
-    # Linea 1: pildora compacta con solo el porcentaje (el detalle vive
-    # en el dropdown); el fallback ANSI conserva el formato anterior.
+    # Line 1: compact pill with just the percentage; details live in the
+    # dropdown.
     text = "%s%%%s" % (fmt_percent(percent), suffix)
     emit_title(text, hex_for(percent), bg)
     print("---")
-    # Barra unicode pintada con hex para combinar con el indicador.
+    # Progress bar tinted green to match the pill.
     print(bar_for(percent) + " | color=#2ecc71")
-    print("Usado: %s / %s" % (used, entitlement))
-    print("Restante: %s" % remaining)
+    print("Used: %s / %s" % (used, entitlement))
+    print("Remaining: %s" % remaining)
     print("Reset: %s" % reset)
-    print("Actualizado: %s" % updated_at)
+    print("Updated: %s" % updated_at)
     if stale:
-        print("Stale: si | color=#e74c3c")
+        print("Stale: yes | color=#e74c3c")
     return 0
 
 
@@ -196,7 +197,7 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as exc:
-        # Nunca fallar: SwiftBar oculta el plugin si el exit code no es 0.
-        print("Copilot: sin datos | color=red")
-        sys.stderr.write("copilot plugin: error inesperado: %s\n" % exc)
+        # Never fail: SwiftBar hides the plugin on a non-zero exit code.
+        print("Copilot: no data | color=red")
+        sys.stderr.write("copilot plugin: unexpected error: %s\n" % exc)
         sys.exit(0)

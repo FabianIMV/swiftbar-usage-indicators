@@ -1,6 +1,6 @@
-"""Copilot premium-interactions usage fetcher. Solo stdlib.
+"""GitHub Copilot premium-interactions usage fetcher. Standard library only.
 
-Cache en ~/.cache/copilot-usage.json con keys:
+Caches to ~/.cache/copilot-usage.json with the keys:
   used, entitlement, remaining, percent_used, reset, updated_at, stale.
 """
 
@@ -19,7 +19,7 @@ CACHE_PATH = Path.home() / ".cache" / "copilot-usage.json"
 
 
 def get_gh_token() -> str:
-    """Obtiene el token via `gh auth token`. Solo memoria, nunca disco."""
+    """Get a token via `gh auth token`. Kept in memory only, never written to disk."""
     try:
         proc = subprocess.run(
             ["gh", "auth", "token"],
@@ -29,25 +29,25 @@ def get_gh_token() -> str:
             check=False,
         )
     except FileNotFoundError:
-        raise RuntimeError("gh no esta instalado o no esta en PATH. Instala gh y corre `gh auth login`.")
+        raise RuntimeError("gh is not installed or not on PATH. Install gh and run `gh auth login`.")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("`gh auth token` tardo demasiado (timeout 15s).")
+        raise RuntimeError("`gh auth token` timed out (15s).")
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(
-            "No se pudo obtener token: `gh auth token` fallo. "
-            "Corre `gh auth login` / `gh auth refresh`. Detalle: " + (err or f"exit {proc.returncode}")
+            "Could not get a token: `gh auth token` failed. "
+            "Run `gh auth login` / `gh auth refresh`. Details: " + (err or f"exit {proc.returncode}")
         )
     token = proc.stdout.strip()
     if not token:
-        raise RuntimeError("`gh auth token` no devolvio token. Corre `gh auth login` de nuevo.")
+        raise RuntimeError("`gh auth token` returned no token. Run `gh auth login` again.")
     return token
 
 
 def fetch_raw(token: str) -> dict:
-    """GET al endpoint interno de Copilot. Devuelve dict parseado."""
+    """GET the internal Copilot endpoint and return the parsed dict."""
     if not token:
-        raise RuntimeError("fetch_raw recibio un token vacio.")
+        raise RuntimeError("fetch_raw received an empty token.")
     req = urllib.request.Request(
         API_URL,
         headers={
@@ -61,18 +61,18 @@ def fetch_raw(token: str) -> dict:
         with urllib.request.urlopen(req, timeout=15) as resp:
             body = resp.read().decode("utf-8")
     except Exception as exc:
-        raise RuntimeError(f"Fallo red consultando {API_URL}: {exc}")
+        raise RuntimeError(f"Network error requesting {API_URL}: {exc}")
     try:
         data = json.loads(body)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Respuesta no-JSON del endpoint Copilot: {exc}")
+        raise RuntimeError(f"Non-JSON response from the Copilot endpoint: {exc}")
     if not isinstance(data, dict):
-        raise RuntimeError("Respuesta inesperada del endpoint Copilot (no es objeto JSON).")
+        raise RuntimeError("Unexpected response from the Copilot endpoint (not a JSON object).")
     return data
 
 
 def parse_usage(data: dict) -> dict:
-    """Extrae premium_interactions y arma el dict del contrato de cache."""
+    """Extract premium_interactions and build the cache-contract dict."""
     snap = (data.get("quota_snapshots") or {}).get("premium_interactions") or {}
 
     used = int(snap.get("credits_used", 0) or 0)
@@ -136,10 +136,10 @@ def _write_cache_atomic(payload: dict) -> None:
 
 
 def get_usage() -> dict:
-    """Une token + fetch + parse, escribe cache atomico.
+    """Token + fetch + parse, then write the cache atomically.
 
-    Si falla red/API, devuelve el ultimo cache con stale=true
-    conservando su updated_at original. Sin cache previo, propaga el error.
+    On a network/API failure, return the last cache with stale=true and its
+    original updated_at. Without a previous cache, the error propagates.
     """
     try:
         token = get_gh_token()
@@ -151,8 +151,8 @@ def get_usage() -> dict:
         if cached is not None:
             cached["stale"] = True
             return cached
-        raise RuntimeError(f"No se pudo obtener uso de Copilot y no hay cache previo: {exc}")
+        raise RuntimeError(f"Could not fetch Copilot usage and there is no previous cache: {exc}")
 
 
 if __name__ == "__main__":
-    print(get_usage())
+    print(json.dumps(get_usage()))
